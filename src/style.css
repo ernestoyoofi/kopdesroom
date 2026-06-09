@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: "JetBrains Mono", monospace;
+}
+body {
+  background-color: #000; /* Pinggiran hitam pas PC widescreen */
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+canvas {
+  display: block;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+  filter: blur(0.1px);
+}
+.help-overlay {
+  position: fixed;
+  width: 250px;
+  top: 15px;
+  left: 15px;
+  background-color: #ffffff;
+  font-size: 14px;
+  padding: 6px 12px;
+  z-index: 30;
+}
+.help-overlay h3 {
+  margin-bottom: 5px;
+}
+.help-overlay .info {
+  margin-bottom: 5px;
+  color: #505050;
+}
+.help-overlay .bug-info {
+  margin-top: 5px;
+  color: #505050;
+}
+.help-overlay .bug-info a {
+  color: #104ba3;
+  text-decoration: underline;
+}
+.help-overlay .list-overlay {
+  padding-left: 25px;
+}
+.help-overlay .list-overlay li {
+  padding: 1px 0px;
+  padding-left: 0px;
+}
+.help-overlay .list-overlay li code {
+  background-color: #d3d3d3;
+  padding: 2px 5px;
+  font-size: 12px;
+}
