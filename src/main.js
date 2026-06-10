@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 // --- 0. CONFIGURATION & STATE SYSTEM ---
-const GAME_FPS = 23.3;
+// const GAME_FPS = 60; // test 60fps
+const GAME_FPS = 30; // test 30fps
+// const GAME_FPS = 23.3;
 const ASPECT_RATIO = 4 / 3;
 
 // Game States: 'loading', 'voice-setup', 'playing', 'paused', 'gameover'
@@ -49,10 +51,13 @@ const player = {
   position: new THREE.Vector3(0, 1.6, 0),
   height: 1.6,
   radius: 0.6,
-  walkSpeed: 3.8,
+  walkSpeed: 2.28,
   runSpeed: 6.2,
-  currentSpeed: 3.8
+  velocity: new THREE.Vector3(),
+  acceleration: 10,
+  friction: 6
 };
+
 cameraPivot.position.copy(player.position);
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
@@ -60,15 +65,11 @@ renderer.setSize(size.width, size.height);
 renderer.setPixelRatio(1);
 
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 2.43;
 
-const renderTarget = new THREE.WebGLRenderTarget(size.width, size.height, {
-  minFilter: THREE.LinearFilter,
-  magFilter: THREE.NearestFilter,
-  format: THREE.RGBAFormat
-});
+const renderTarget = new THREE.WebGLRenderTarget(size.width, size.height);
 
 // --- 2. LIGHTING SYSTEM ---
 const ambientLight = new THREE.AmbientLight(0xffffff, 1.4); 
@@ -101,7 +102,10 @@ const audioLoader = new THREE.AudioLoader();
 
 let footstepLeftBuffer = null;
 let footstepRightBuffer = null;
-let totalAudioFiles = 4, audioDownloadedCount = 0;
+let flashOnBuffer = null;
+let flashOffBuffer = null;
+const ambienceBuffers = [];
+let totalAudioFiles = 8, audioDownloadedCount = 0;
 const audioProgressMap = new Map();
 let isMuted = false;
 
@@ -214,13 +218,13 @@ function drawInternalLoadingHUD(nowTime) {
 
     textContext.font = "bold 22px 'JetBrains Mono', monospace";
     textContext.fillStyle = "#ffffff";
-    textContext.fillText("[ESC] Resume", 256, 290);
+    textContext.fillText("[Screen!] Resume", 256, 290);
     textContext.fillText(`[M] ${isMuted ? "Unmute" : "Mute"} Audio`, 256, 320);
 
     const blink = Math.sin(nowTime * 0.006) > 0;
     textContext.font = "bold 15px 'JetBrains Mono', monospace";
     textContext.fillStyle = blink ? "#ffffff" : "#444438";
-    textContext.fillText("Press ESC / click canvas to resume", 256, 380);
+    textContext.fillText("Click screen to resume", 256, 380);
 
   } else if (gameState === 'gameover') {
     // STATE: DISCONNECTING TEKS JATUH
@@ -281,6 +285,7 @@ canvas.addEventListener('click', () => {
 
 const currentFlashlightQuat = new THREE.Quaternion();
 let yaw = 0, pitch = 0;
+let smoothYaw = 0, smoothPitch = 0;
 let lastMovementX = 0, lastMovementY = 0;
 
 document.addEventListener('mousemove', (event) => {
@@ -289,12 +294,29 @@ document.addEventListener('mousemove', (event) => {
   pitch -= event.movementY * 0.002;
   pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
   
-  cameraPivot.rotation.y = yaw;
-  camera.rotation.x = pitch;
-
   lastMovementX += Math.abs(event.movementX) * 0.2;
   lastMovementY += Math.abs(event.movementY) * 0.2;
 });
+
+let flashlightOn = true;
+canvas.addEventListener('mousedown', (e) => {
+  if (gameState === 'playing' && isLocked && e.button === 0) {
+    flashlightOn = !flashlightOn;
+    flashlight.visible = flashlightOn;
+    const flashAudio = new THREE.Audio(audioListener);
+    flashAudio.setBuffer(flashlightOn ? flashOnBuffer : flashOffBuffer);
+    flashAudio.setVolume(0.7);
+    flashAudio.play();
+  }
+});
+
+let zoomFov = 60, zoomTarget = 60;
+canvas.addEventListener('wheel', (e) => {
+  if (gameState !== 'playing') return;
+  e.preventDefault();
+  zoomTarget += e.deltaY * 0.05;
+  zoomTarget = Math.max(12, Math.min(60, zoomTarget));
+}, { passive: false });
 
 const keys = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
 
@@ -363,7 +385,7 @@ function updateMicrophoneVolumeTrack(deltaTime) {
   if (gameState === 'playing') {
     if (currentMicVolume > micThreshold) {
       highNoiseDuration += deltaTime * 1000; 
-      if (highNoiseDuration >= 320) { 
+      if (highNoiseDuration >= 270) { 
         triggerCameraCrashDisconnect();
       }
     } else {
@@ -416,7 +438,11 @@ function initGlobalPreLoader() {
     { name: 'noise', url: '/bg/bg-noise-backroom.mp3' },
     { name: 'song', url: '/bg/bg-song-daise.mp3' },
     { name: 'fsLeft', url: '/sfx/footstep-left.mp3' },
-    { name: 'fsRight', url: '/sfx/footstep-right.mp3' }
+    { name: 'fsRight', url: '/sfx/footstep-right.mp3' },
+    { name: 'flashOn', url: '/sfx/flashlight-on.mp3' },
+    { name: 'flashOff', url: '/sfx/flashlight-off.mp3' },
+    { name: 'amb1', url: '/ambiences/banyak-negara-yang-panik-indonesia-masih-ok.mp3' },
+    { name: 'amb2', url: '/ambiences/desa-ga-pakai-dolar.mp3' }
   ];
   audioFiles.forEach((file, idx) => {
     audioProgressMap.set(idx, 0);
@@ -426,6 +452,10 @@ function initGlobalPreLoader() {
         else if (idx === 1) bgSongDaise.setBuffer(buffer);
         else if (file.name === 'fsLeft') footstepLeftBuffer = buffer;
         else if (file.name === 'fsRight') footstepRightBuffer = buffer;
+        else if (file.name === 'flashOn') flashOnBuffer = buffer;
+        else if (file.name === 'flashOff') flashOffBuffer = buffer;
+        else if (file.name === 'amb1') ambienceBuffers[0] = buffer;
+        else if (file.name === 'amb2') ambienceBuffers[1] = buffer;
         audioDownloadedCount++; audioProgressMap.set(idx, 100); checkOverallAssetsLoading();
       },
       (xhr) => { if (xhr.total > 0) { audioProgressMap.set(idx, (xhr.loaded / xhr.total) * 100); checkOverallAssetsLoading(); } }
@@ -538,9 +568,6 @@ function updateProceduralMap() {
 initGlobalPreLoader();
 
 // --- 8. CUSTOM VHS POST-PROCESSING SHADER ---
-const postScene = new THREE.Scene();
-const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-
 const vhsShaderMaterial = new THREE.ShaderMaterial({
   uniforms: {
     tDiffuse: { value: null },
@@ -596,16 +623,33 @@ const vhsShaderMaterial = new THREE.ShaderMaterial({
         blurColor += texture2D(tDiffuse, uv + vec2(blurSteps * 3.0, 0.0));
         blurColor /= 4.0;
 
-        finalColor = baseColor * 0.6 + blurColor * 0.6;
+        float blurWeight = min(uBlurIntensity * 0.1, 0.35);
+        finalColor = baseColor * (1.0 - blurWeight) + blurColor * blurWeight;
+
+        // Bloom: extract bright areas and add glow
+        float brightLum = dot(baseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float bloomIntensity = max(brightLum - 0.6, 0.0) * 1.5;
+        finalColor.rgb += blurColor.rgb * bloomIntensity * 0.8;
         float aoFactor = 1.0;
         vec4 checkSides = texture2D(tDiffuse, uv + vec2(0.002, 0.002)) + texture2D(tDiffuse, uv - vec2(0.002, 0.002));
         if (length(finalColor.rgb - (checkSides.rgb / 2.0)) > 0.22) aoFactor = 0.94; 
         finalColor.rgb *= aoFactor;
       }
 
-      float staticNoise = noise(uv + vec2(uTime, sin(uTime)));
-      if (staticNoise > 0.97) finalColor.rgb -= vec3(0.25 * noise(vec2(uv.y, uTime)));
-      finalColor.rgb += vec3(staticNoise * 0.06);
+      // Thick film grain
+      float grain = noise(uv * 4.0 + vec2(uTime * 0.6, 0.0));
+      grain = (grain - 0.5) * 0.08;
+      finalColor.rgb += grain;
+      // Blurred noise layer
+      float blurNoise = (noise(uv * 2.5 + vec2(uTime * 0.3, 0.0)) - 0.5) * 0.05;
+      finalColor.rgb += blurNoise;
+      // Dust/scratches
+      float dust = noise(vec2(uv.y * 100.0 + uTime * 0.3, floor(uv.x * 50.0)));
+      dust = step(0.995, dust) * 0.2;
+      finalColor.rgb += dust;
+      // Color flicker
+      float flicker = 1.0 + (noise(vec2(uTime * 0.05, 0.0)) - 0.5) * 0.03;
+      finalColor.rgb *= flicker;
 
       float vignette = uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y);
       vignette = clamp(pow(16.0 * vignette, 0.35), 0.0, 1.0);
@@ -615,6 +659,8 @@ const vhsShaderMaterial = new THREE.ShaderMaterial({
   `
 });
 
+const postScene = new THREE.Scene();
+const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const postPlane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), vhsShaderMaterial);
 postScene.add(postPlane);
 
@@ -649,48 +695,88 @@ function resetGameVariables() {
   floorObjects.length = 0;
 
   player.position.set(0, 1.6, 0);
+  player.velocity.set(0, 0, 0);
   cameraPivot.position.copy(player.position);
   camera.rotation.set(0, 0, 0);
-  yaw = 0; pitch = 0;
+  yaw = 0; pitch = 0; smoothYaw = 0; smoothPitch = 0;
   cameraPivot.rotation.set(0, 0, 0);
+  shakeIntensity = 0;
+  runTime = 0;
+  leanHeldX = 0; leanHeldRoll = 0; leanDelayTimer = 0; leanReturnProgress = 1;
+  ambienceTimer = 0; ambienceInterval = 30 + Math.random() * 60;
 
+  flashlightOn = true;
+  flashlight.visible = true;
+  zoomFov = 60; zoomTarget = 60;
+  camera.fov = 60;
+  camera.updateProjectionMatrix();
   vhsShaderMaterial.uniforms.uScreenState.value = 0.0;
   gameState = 'voice-setup'; 
 }
 
-// --- 9. PHYSIC COLLISION ENGINE ---
+// --- 9. PHYSIC COLLISION ENGINE (Eased Movement) ---
 function updatePhysics(deltaTime) {
   if (!isLocked || gameState !== 'playing') return;
-  player.currentSpeed = keys.shift ? player.runSpeed : player.walkSpeed;
+  const maxSpeed = keys.shift ? player.runSpeed : player.walkSpeed;
 
-  const moveVector = new THREE.Vector3();
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraPivot.quaternion);
   const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cameraPivot.quaternion);
   forward.y = 0; forward.normalize();
   right.y = 0; right.normalize();
 
-  if (keys.w) moveVector.add(forward); if (keys.s) moveVector.add(forward.clone().negate());
-  if (keys.d) moveVector.add(right); if (keys.a) moveVector.add(right.clone().negate());
-  moveVector.normalize();
+  let moveX = 0, moveZ = 0;
+  if (keys.w) { moveX += forward.x; moveZ += forward.z; }
+  if (keys.s) { moveX -= forward.x; moveZ -= forward.z; }
+  if (keys.d) { moveX += right.x; moveZ += right.z; }
+  if (keys.a) { moveX -= right.x; moveZ -= right.z; }
+
+  const inputMag = Math.sqrt(moveX * moveX + moveZ * moveZ);
+  const hasInput = inputMag > 0.001;
+
+  if (hasInput) {
+    moveX /= inputMag;
+    moveZ /= inputMag;
+    player.velocity.x += moveX * player.acceleration * deltaTime;
+    player.velocity.z += moveZ * player.acceleration * deltaTime;
+    const speed = Math.sqrt(player.velocity.x ** 2 + player.velocity.z ** 2);
+    if (speed > maxSpeed) {
+      player.velocity.x *= maxSpeed / speed;
+      player.velocity.z *= maxSpeed / speed;
+    }
+    lastMovementX += keys.shift ? 0.35 : 0.18;
+  } else {
+    const speed = Math.sqrt(player.velocity.x ** 2 + player.velocity.z ** 2);
+    if (speed > 0) {
+      const frictionAmount = player.friction * deltaTime;
+      if (frictionAmount >= speed) {
+        player.velocity.x = 0;
+        player.velocity.z = 0;
+      } else {
+        const ratio = (speed - frictionAmount) / speed;
+        player.velocity.x *= ratio;
+        player.velocity.z *= ratio;
+      }
+    }
+  }
 
   const nextPosition = player.position.clone();
-  nextPosition.x += moveVector.x * player.currentSpeed * deltaTime;
-  nextPosition.z += moveVector.z * player.currentSpeed * deltaTime;
+  nextPosition.x += player.velocity.x * deltaTime;
+  nextPosition.z += player.velocity.z * deltaTime;
 
   let canMoveX = true, canMoveZ = true;
-  if (moveVector.lengthSq() > 0 && wallCollisionObjects.length > 0) {
+  const velMag = Math.sqrt(player.velocity.x ** 2 + player.velocity.z ** 2);
+  if (velMag > 0.001 && wallCollisionObjects.length > 0) {
     const rayOrigin = new THREE.Vector3(player.position.x, player.position.y - 0.5, player.position.z);
-    wallRaycaster.set(rayOrigin, new THREE.Vector3(moveVector.x, 0, 0).normalize());
+    wallRaycaster.set(rayOrigin, new THREE.Vector3(player.velocity.x, 0, 0).normalize());
     const hitX = wallRaycaster.intersectObjects(wallCollisionObjects);
     if (hitX.length > 0 && hitX[0].distance < player.radius) canMoveX = false;
 
-    wallRaycaster.set(rayOrigin, new THREE.Vector3(0, 0, moveVector.z).normalize());
+    wallRaycaster.set(rayOrigin, new THREE.Vector3(0, 0, player.velocity.z).normalize());
     const hitZ = wallRaycaster.intersectObjects(wallCollisionObjects);
     if (hitZ.length > 0 && hitZ[0].distance < player.radius) canMoveZ = false;
-    lastMovementX += keys.shift ? 0.35 : 0.18;
   }
-  if (canMoveX) player.position.x = nextPosition.x;
-  if (canMoveZ) player.position.z = nextPosition.z;
+  if (canMoveX) player.position.x = nextPosition.x; else player.velocity.x = 0;
+  if (canMoveZ) player.position.z = nextPosition.z; else player.velocity.z = 0;
 }
 
 // --- 10. MULTI-CHANNEL FOOTSTEP AUDIO ENGINE ---
@@ -707,28 +793,53 @@ function playDynamicFootstepSFX() {
 function updateFootstepAudioLogic(deltaTime) {
   const isMoving = keys.w || keys.a || keys.s || keys.d;
   if (!isLocked || !isMoving || gameState !== 'playing') { stepTimer = 0; return; }
-  const stepInterval = keys.shift ? 0.28 : 0.44;
+  const stepInterval = keys.shift ? 0.22 : 0.38;
   stepTimer += deltaTime;
   if (stepTimer >= stepInterval) { stepTimer = 0; playDynamicFootstepSFX(); }
 }
 
-// --- 11. HARD THUD CAMERA BODYCAM SHAKE + LEAN FUNCTION ---
+// --- 11. HARD THUD CAMERA BODYCAM SHAKE + LEAN FUNCTION (Smooth Transitions) ---
 let bobTime = 0, currentBobX = 0, currentBobY = 0, currentRoll = 0, currentPitch = 0, currentLeanX = 0, currentLeanRoll = 0;
+let shakeIntensity = 0, runTime = 0;
+let leanHeldX = 0, leanHeldRoll = 0, leanDelayTimer = 0, leanReturnProgress = 1, leanReturnFromX = 0, leanReturnFromRoll = 0;
 function updateCameraShake(deltaTime) {
   if (gameState !== 'playing') return;
   const isMoving = keys.w || keys.a || keys.s || keys.d;
+  const isRunning = keys.shift && isMoving;
+  const stepInterval = isMoving ? (keys.shift ? 0.22 : 0.38) : 1;
+
+  if (isRunning) {
+    runTime = Math.min(runTime + deltaTime, 5);
+  } else {
+    runTime = Math.max(runTime - deltaTime * 3, 0);
+  }
+  const runProg = runTime / 5;
+  const targetIntensity = isRunning ? (1.0 + runProg) : (isMoving ? 1.0 : 0);
+  shakeIntensity = THREE.MathUtils.lerp(shakeIntensity, targetIntensity, isMoving ? 0.12 : 0.06);
+
   let targetBobX = 0, targetBobY = 0, targetRoll = 0, targetPitch = 0;
 
-  if (isLocked && isMoving) {
-    const tempo = keys.shift ? 22 : 14; bobTime += deltaTime * tempo; 
-    const rawSin = Math.sin(bobTime);
-    targetBobY = Math.pow(Math.abs(rawSin), 3.0) * (keys.shift ? 0.28 : 0.18); 
-    targetBobX = Math.cos(bobTime * 0.5) * (keys.shift ? 0.10 : 0.06);
-    targetRoll = Math.cos(bobTime * 0.5) * (keys.shift ? 0.06 : 0.03);
-    targetPitch = Math.sin(bobTime) * (keys.shift ? 0.03 : 0.015);
+  if (isLocked && shakeIntensity > 0.01) {
+    const tempo = isMoving ? (Math.PI / stepInterval) : 2.5;
+    bobTime += deltaTime * tempo;
+    const t = bobTime;
+    const walkAmp = Math.min(shakeIntensity, 1.0);
+    const runBoost = Math.max(0, shakeIntensity - 1.0);
+
+    // Phase-aligned to footsteps: t advances π per step, cos peaks at each footstep
+    const swayX = -Math.cos(t) * 0.5 + Math.sin(t * 2.5) * 0.25 + Math.sin(t * 4.0) * 0.1;
+    const swayZ = -Math.sin(t) * 0.35 + Math.sin(t * 2.0) * 0.25 + Math.sin(t * 3.0) * 0.15;
+    const verticalBounce = Math.pow(Math.abs(Math.cos(t)), 2.0);
+
+    targetBobX = swayX * (0.08 * walkAmp + 0.04 * runBoost);
+    targetBobY = verticalBounce * (0.10 * walkAmp + 0.10 * runBoost) + Math.abs(swayZ) * (0.04 * walkAmp + 0.02 * runBoost);
+    targetRoll = -Math.cos(t) * (0.04 * walkAmp + 0.17 * runBoost);
+    targetPitch = -Math.cos(t) * (0.07 * walkAmp + 0.08 * runBoost);
+    camera.rotation.y = Math.sin(t) * 0.005 * walkAmp - Math.cos(t * 0.5) * 0.10 * runBoost;
   } else if (isLocked) {
-    bobTime += deltaTime * 0.9;
-    targetBobY = Math.sin(bobTime) * 0.04; targetBobX = Math.cos(bobTime * 0.5) * 0.03; targetRoll = Math.sin(bobTime * 0.5) * 0.015;
+    bobTime += deltaTime * 2.5;
+    targetBobY = Math.sin(bobTime) * 0.13; targetBobX = Math.cos(bobTime * 0.7) * 0.09; targetRoll = Math.sin(bobTime * 0.6) * 0.05; targetPitch = Math.sin(bobTime * 0.4) * 0.035;
+    camera.rotation.y = Math.sin(bobTime * 0.5) * 0.005;
   }
 
   currentBobX = THREE.MathUtils.lerp(currentBobX, targetBobX, 0.2);
@@ -738,16 +849,87 @@ function updateCameraShake(deltaTime) {
 
   let targetLeanX = 0, targetLeanRoll = 0;
   if (isLocked) {
-    if (keys.q) { targetLeanX = -1.1; targetLeanRoll = 0.52; lastMovementX += 0.08; } 
-    else if (keys.e) { targetLeanX = 1.1; targetLeanRoll = -0.52; lastMovementX += 0.08; }
+    if (keys.q) {
+      leanHeldX = -1.1; leanHeldRoll = 0.52; leanDelayTimer = 0.2; leanReturnProgress = 1; lastMovementX += 0.08;
+    } else if (keys.e) {
+      leanHeldX = 1.1; leanHeldRoll = -0.52; leanDelayTimer = 0.2; leanReturnProgress = 1; lastMovementX += 0.08;
+    }
+
+    if (keys.q || keys.e) {
+      targetLeanX = leanHeldX; targetLeanRoll = leanHeldRoll;
+    } else if (leanHeldX !== 0 || leanHeldRoll !== 0) {
+      if (leanDelayTimer > 0) {
+        leanDelayTimer -= deltaTime;
+        targetLeanX = leanHeldX; targetLeanRoll = leanHeldRoll;
+      } else if (leanReturnProgress >= 1) {
+        leanReturnFromX = currentLeanX; leanReturnFromRoll = currentLeanRoll;
+        leanReturnProgress = 0;
+        targetLeanX = leanReturnFromX; targetLeanRoll = leanReturnFromRoll;
+      } else {
+        leanReturnProgress += deltaTime / 3;
+        if (leanReturnProgress > 1) leanReturnProgress = 1;
+        const ease = 1 - Math.pow(1 - leanReturnProgress, 3);
+        targetLeanX = THREE.MathUtils.lerp(leanReturnFromX, 0, ease);
+        targetLeanRoll = THREE.MathUtils.lerp(leanReturnFromRoll, 0, ease);
+        if (leanReturnProgress >= 1) { leanHeldX = 0; leanHeldRoll = 0; }
+      }
+    }
   }
   currentLeanX = THREE.MathUtils.lerp(currentLeanX, targetLeanX, 0.14);
   currentLeanRoll = THREE.MathUtils.lerp(currentLeanRoll, targetLeanRoll, 0.14);
 
   const leanVector = new THREE.Vector3(currentBobX + currentLeanX, currentBobY - 0.05, 0).applyQuaternion(cameraPivot.quaternion); 
   cameraPivot.position.copy(player.position).add(leanVector);
-  camera.rotation.z = currentRoll + currentLeanRoll;
-  camera.rotation.y = Math.sin(bobTime * 0.5) * 0.005;
+  camera.rotation.z = currentRoll + currentLeanRoll + (Math.random() - 0.5) * 0.003;
+}
+
+// --- AMBIENCE RANDOM PLAYBACK ---
+let ambienceTimer = 0;
+let ambienceInterval = 30 + Math.random() * 60;
+
+function updateAmbienceSystem(deltaTime) {
+  console.log("Time Ambience:", ambienceInterval)
+  if (gameState !== 'playing' || isMuted) return;
+  ambienceTimer += deltaTime;
+  if (ambienceTimer < ambienceInterval) return;
+  ambienceTimer = 0;
+  ambienceInterval = 30 + Math.random() * 60;
+
+  if (ambienceBuffers.length === 0) return;
+  const buf = ambienceBuffers[Math.floor(Math.random() * ambienceBuffers.length)];
+  if (!buf) return;
+
+  let px = player.position.x, pz = player.position.z;
+  if (activeRooms.size > 0) {
+    const pGX = Math.round(player.position.x / ROOM_SIZE);
+    const pGZ = Math.round(player.position.z / ROOM_SIZE);
+    const candidates = [];
+    for (const key of activeRooms.keys()) {
+      const [rx, rz] = key.split(',').map(Number);
+      if (rx !== pGX || rz !== pGZ) candidates.push(key);
+    }
+    if (candidates.length > 0) {
+      const key = candidates[Math.floor(Math.random() * candidates.length)];
+      const [rx, rz] = key.split(',').map(Number);
+      px = rx * ROOM_SIZE + (Math.random() - 0.5) * ROOM_SIZE * 0.7;
+      pz = rz * ROOM_SIZE + (Math.random() - 0.5) * ROOM_SIZE * 0.7;
+    } else {
+      px += (Math.random() - 0.5) * 20;
+      pz += (Math.random() - 0.5) * 20;
+    }
+  }
+
+  console.log("Ambience...")
+
+  const posAudio = new THREE.PositionalAudio(audioListener);
+  posAudio.setBuffer(buf);
+  posAudio.setRefDistance(12);
+  posAudio.setRolloffFactor(0.8);
+  posAudio.setVolume(2.4);
+  posAudio.position.set(px, 1.5, pz);
+  scene.add(posAudio);
+  posAudio.play();
+  posAudio.onEnded = () => scene.remove(posAudio);
 }
 
 // --- 12. ANIMATION LOOP ENGINE (23.3 FPS) ---
@@ -773,7 +955,22 @@ function animate() {
       survivalTime += deltaTime;
       updatePhysics(deltaTime);
       updateCameraShake(deltaTime);
+      // Handcam rotation lag + tremor
+      let yawDiff = yaw - smoothYaw;
+      yawDiff = Math.atan2(Math.sin(yawDiff), Math.cos(yawDiff));
+      smoothYaw += yawDiff * 0.2;
+      smoothPitch = THREE.MathUtils.lerp(smoothPitch, pitch, 0.2);
+      cameraPivot.rotation.y = smoothYaw;
+      camera.rotation.x = smoothPitch + (Math.random() - 0.5) * 0.0015 + currentPitch;
+      // Smooth zoom
+      zoomFov = THREE.MathUtils.lerp(zoomFov, zoomTarget, 0.24);
+      camera.fov = zoomFov;
+      camera.updateProjectionMatrix();
+      // Decay motion blur intensity
+      lastMovementX *= 0.96;
+      lastMovementY *= 0.96;
       updateFootstepAudioLogic(deltaTime);
+      updateAmbienceSystem(deltaTime);
       updateProceduralMap(); 
     } else {
       // HUD tetap digambar walaupun gamenya stuck/pause/setup
@@ -789,11 +986,10 @@ function animate() {
     const targetVector = new THREE.Vector3(0, 0, -1).applyQuaternion(currentFlashlightQuat);
     flashlight.target.position.copy(worldCameraPos).add(targetVector);
 
-    // ... (sisanya tetap sama: update shader uniforms & render) ...
     vhsShaderMaterial.uniforms.uTime.value = (now * 0.001) % 10.0;
     vhsShaderMaterial.uniforms.uBlurIntensity.value = Math.min((lastMovementX + lastMovementY), 2.0);
     vhsShaderMaterial.uniforms.uScreenState.value = gameState === 'playing' ? 1.0 : 0.0;
-    
+
     renderer.setRenderTarget(renderTarget);
     renderer.render(scene, camera);
     renderer.setRenderTarget(null);

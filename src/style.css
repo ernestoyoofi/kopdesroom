@@ -17,13 +17,14 @@ body {
 canvas {
   display: block;
   box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
-  filter: blur(0.1px);
+  filter: blur(1.2px);
+  scale: 1.1;
 }
 .help-overlay {
   position: fixed;
-  width: 250px;
-  top: 15px;
-  left: 15px;
+  width: 230px;
+  top: 10px;
+  left: 10px;
   background-color: #ffffff;
   font-size: 14px;
   padding: 6px 12px;
@@ -45,14 +46,52 @@ canvas {
   text-decoration: underline;
 }
 .help-overlay .list-overlay {
-  padding-left: 25px;
+  padding-left: 15px;
 }
 .help-overlay .list-overlay li {
   padding: 1px 0px;
   padding-left: 0px;
+  font-size: 13px;
 }
 .help-overlay .list-overlay li code {
-  background-color: #d3d3d3;
-  padding: 2px 5px;
-  font-size: 12px;
+  background-color: #f3f3f3;
+  padding: 1px 4px;
+  font-size: 11px;
+  margin: 0px 1px;
+  border-radius: 4px;
+  box-shadow: 0px 2px 0px #dadada;
+  border: 1px dotted #dadada;
+  scale: 0.8;
+  margin-bottom: 0.4px;
+}
+.info-nomobilecontrol {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100dvh;
+  animation: info-nomobilecontrol-animate .3s;
+  animation-delay: 3s;
+  user-select: none;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 60;
+  animation-fill-mode: forwards;
+}
+.info-nomobilecontrol .box {
+  background-color: #ffffff;
+  padding: 15px;
+  max-width: 360px;
+  font-size: 13px;
+}
+.info-nomobilecontrol .box h3 {
+  font-size: 15px;
+  margin-bottom: 3px;
+  font-weight: bold;
+}
+@keyframes info-nomobilecontrol-animate {
+  0% { opacity: 100; }
+  100% { opacity: 0; }
 }
