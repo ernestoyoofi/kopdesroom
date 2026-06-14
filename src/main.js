@@ -24,7 +24,7 @@ let currentMicVolume = 0;
 let highNoiseDuration = 0; 
 
 // --- 1. SETUP CANVAS & SCENE RATIO ---
-const canvas = document.querySelector('#gameCanvas');
+const canvas = document.querySelector('#game-canvas');
 
 function getCanvasSize() {
   const windowWidth = window.innerWidth;
@@ -105,9 +105,26 @@ let footstepRightBuffer = null;
 let flashOnBuffer = null;
 let flashOffBuffer = null;
 const ambienceBuffers = [];
-let totalAudioFiles = 8, audioDownloadedCount = 0;
+let totalAudioFiles = 10, audioDownloadedCount = 0; // Increased to 10
 const audioProgressMap = new Map();
 let isMuted = false;
+
+// --- SCP & RANDOM EVENTS STATE ---
+let scpSoloMesh = null;
+let scpFallingMesh = null;
+let jumpscareBuffer = null;
+let hitMetalBuffer = null;
+
+// let jumpscareTimer = 4; // Testing Jumpscare (Only For Debugging)
+let jumpscareTimer = 60 + Math.random() * 60; // Start jumpscare after 1-2 mins
+let jumpscarePhase = 'idle'; // 'idle', 'flicker', 'waiting', 'rushing'
+let jumpscareInternalTimer = 0;
+let jumpscareRushDir = new THREE.Vector3();
+
+let metalFallTimer = 30 + Math.random() * 45;
+let fallingObjectActive = false;
+let currentFallingObject = null;
+let fallingVelocity = 0;
 
 // --- 4. INTERNAL CANVAS HUD ENGINE (SISTEM GAMBAR OVERLAY MULTI-STATE) ---
 const textCanvas = document.createElement('canvas');
@@ -405,7 +422,7 @@ const wallRaycaster = new THREE.Raycaster();
 const roomMasterCache = { 1: null, 2: null, 3: null, 4: null };
 const preLoadProgressMap = new Map();
 
-let totalModelsToDownload = 4, modelsDownloadedCount = 0;
+let totalModelsToDownload = 6, modelsDownloadedCount = 0; // Increased to 6
 
 function checkOverallAssetsLoading() {
   let sumPercentage = 0;
@@ -421,18 +438,35 @@ function checkOverallAssetsLoading() {
 }
 
 function initGlobalPreLoader() {
-  for (let id = 1; id <= 4; id++) {
-    preLoadProgressMap.set(id, 0);
-    const url = `/models/room${id}.glb`;
-    loader.load(url,
+  const modelFiles = [
+    { id: 1, url: '/models/room1.glb' },
+    { id: 2, url: '/models/room2.glb' },
+    { id: 3, url: '/models/room3.glb' },
+    { id: 4, url: '/models/room4.glb' },
+    { id: 'solo', url: '/models/scp-solo02.glb' },
+    { id: 'falling', url: '/models/scp-opgmbg01.glb' }
+  ];
+
+  modelFiles.forEach((file) => {
+    preLoadProgressMap.set(file.id, 0);
+    loader.load(file.url,
       (gltf) => {
-        roomMasterCache[id] = gltf.scene; 
-        modelsDownloadedCount++; preLoadProgressMap.set(id, 100); checkOverallAssetsLoading();
+        if (typeof file.id === 'number') roomMasterCache[file.id] = gltf.scene;
+        else if (file.id === 'solo') {
+          scpSoloMesh = gltf.scene;
+          scpSoloMesh.visible = false;
+          scene.add(scpSoloMesh);
+        } else if (file.id === 'falling') {
+          scpFallingMesh = gltf.scene;
+        }
+        modelsDownloadedCount++; 
+        preLoadProgressMap.set(file.id, 100); 
+        checkOverallAssetsLoading();
       },
-      (xhr) => { if (xhr.total > 0) { preLoadProgressMap.set(id, (xhr.loaded / xhr.total) * 100); checkOverallAssetsLoading(); } },
+      (xhr) => { if (xhr.total > 0) { preLoadProgressMap.set(file.id, (xhr.loaded / xhr.total) * 100); checkOverallAssetsLoading(); } },
       (err) => console.error("Load gagal:", err)
     );
-  }
+  });
 
   const audioFiles = [
     { name: 'noise', url: '/bg/bg-noise-backroom.mp3' },
@@ -442,7 +476,9 @@ function initGlobalPreLoader() {
     { name: 'flashOn', url: '/sfx/flashlight-on.mp3' },
     { name: 'flashOff', url: '/sfx/flashlight-off.mp3' },
     { name: 'amb1', url: '/ambiences/banyak-negara-yang-panik-indonesia-masih-ok.mp3' },
-    { name: 'amb2', url: '/ambiences/desa-ga-pakai-dolar.mp3' }
+    { name: 'amb2', url: '/ambiences/desa-ga-pakai-dolar.mp3' },
+    { name: 'jumpscare', url: '/sfx/jumpscare-wokaget.mp3' },
+    { name: 'metal', url: '/sfx/hit-metal-falling.mp3' }
   ];
   audioFiles.forEach((file, idx) => {
     audioProgressMap.set(idx, 0);
@@ -456,6 +492,8 @@ function initGlobalPreLoader() {
         else if (file.name === 'flashOff') flashOffBuffer = buffer;
         else if (file.name === 'amb1') ambienceBuffers[0] = buffer;
         else if (file.name === 'amb2') ambienceBuffers[1] = buffer;
+        else if (file.name === 'jumpscare') jumpscareBuffer = buffer;
+        else if (file.name === 'metal') hitMetalBuffer = buffer;
         audioDownloadedCount++; audioProgressMap.set(idx, 100); checkOverallAssetsLoading();
       },
       (xhr) => { if (xhr.total > 0) { audioProgressMap.set(idx, (xhr.loaded / xhr.total) * 100); checkOverallAssetsLoading(); } }
@@ -802,57 +840,95 @@ function updateFootstepAudioLogic(deltaTime) {
 let bobTime = 0, currentBobX = 0, currentBobY = 0, currentRoll = 0, currentPitch = 0, currentLeanX = 0, currentLeanRoll = 0;
 let shakeIntensity = 0, runTime = 0;
 let leanHeldX = 0, leanHeldRoll = 0, leanDelayTimer = 0, leanReturnProgress = 1, leanReturnFromX = 0, leanReturnFromRoll = 0;
+let tremorTime = 0; 
+let smoothStepInterval = 0.38;
+let movementWeight = 0, runWeight = 0;
+let collisionContactDist = 1.0; 
+let currentLookRoll = 0; // Added for tilting when looking around
 function updateCameraShake(deltaTime) {
   if (gameState !== 'playing') return;
-  const isMoving = keys.w || keys.a || keys.s || keys.d;
+  const isMoving = (keys.w || keys.a || keys.s || keys.d) && isLocked;
   const isRunning = keys.shift && isMoving;
-  const stepInterval = isMoving ? (keys.shift ? 0.22 : 0.38) : 1;
+  
+  // Weights for blending animations smoothly
+  movementWeight = THREE.MathUtils.lerp(movementWeight, isMoving ? 1.0 : 0.0, 0.08);
+  runWeight = THREE.MathUtils.lerp(runWeight, isRunning ? 1.0 : 0.0, 0.06);
 
-  if (isRunning) {
-    runTime = Math.min(runTime + deltaTime, 5);
-  } else {
-    runTime = Math.max(runTime - deltaTime * 3, 0);
+  // Transition the rhythm speed smoothly
+  const targetStepInterval = isRunning ? 0.22 : 0.38;
+  smoothStepInterval = THREE.MathUtils.lerp(smoothStepInterval, targetStepInterval, 0.1);
+
+  // Accumulate time for different oscillators
+  tremorTime += deltaTime;
+  const tempo = (Math.PI / smoothStepInterval);
+  bobTime += deltaTime * tempo * movementWeight; 
+
+  const t = bobTime;
+  const noiseTime = tremorTime * 1.5;
+
+  // 1. Handheld Jitter/Tremor (High Frequency)
+  const jitterX = (Math.sin(tremorTime * 15.1) * 0.4 + Math.sin(tremorTime * 27.3) * 0.3 + Math.sin(tremorTime * 41.7) * 0.2) * 0.002;
+  const jitterY = (Math.sin(tremorTime * 17.2) * 0.4 + Math.sin(tremorTime * 23.1) * 0.3 + Math.sin(tremorTime * 37.1) * 0.2) * 0.002;
+  
+  // 2. Slow Organic Sway (Low Frequency) - Always active for bodycam feel
+  const swayX = (Math.sin(noiseTime * 0.7) * 0.5 + Math.sin(noiseTime * 1.3) * 0.3) * 0.03;
+  const swayY = (Math.cos(noiseTime * 0.6) * 0.5 + Math.sin(noiseTime * 1.1) * 0.3) * 0.03;
+  const swayRoll = (Math.sin(noiseTime * 0.5) * 0.5 + Math.cos(noiseTime * 0.9) * 0.3) * 0.02;
+
+  // 3. Movement Bobbing (Footsteps)
+  // Dynamic amplitudes based on movement and run weights
+  const bobAmpX = (0.04 + runWeight * 0.05) * movementWeight;
+  const bobAmpY = (0.08 + runWeight * 0.12) * movementWeight;
+  const bobAmpRoll = (0.02 + runWeight * 0.08) * movementWeight;
+  const bobAmpPitch = (0.03 + runWeight * 0.04) * movementWeight;
+
+  const moveBobX = Math.cos(t * 0.5) * bobAmpX;
+  // Step impact: Use a steeper curve for the "down" part of the step
+  const moveBobY = Math.pow(Math.abs(Math.sin(t)), 2.2) * bobAmpY;
+  const moveBobRoll = Math.sin(t * 0.5) * bobAmpRoll;
+  const moveBobPitch = Math.cos(t) * bobAmpPitch;
+
+  // 4. Look-based Roll (Tilting when panning)
+  // We use the difference between target yaw and smooth yaw from the last frame
+  let yawVel = (yaw - smoothYaw);
+  yawVel = Math.atan2(Math.sin(yawVel), Math.cos(yawVel));
+  const maxRollRad = 14 * (Math.PI / 180); // Limit to 14 degrees
+  const targetLookRoll = Math.max(-maxRollRad, Math.min(maxRollRad, -yawVel * 3.5)); 
+  currentLookRoll = THREE.MathUtils.lerp(currentLookRoll, targetLookRoll, 0.1);
+
+  // Combine all layers
+  let targetBobX = swayX + moveBobX + jitterX;
+  let targetBobY = swayY + moveBobY + jitterY;
+  
+  // Extra running shake intensity: Add sharp, chaotic jolts when running
+  if (runWeight > 0.1) {
+    const runJolt = Math.sin(t * 2.0) * Math.cos(t * 0.5);
+    targetBobY += runJolt * 0.08 * runWeight;
+    targetBobX += Math.cos(t * 2.5) * 0.05 * runWeight;
   }
-  const runProg = runTime / 5;
-  const targetIntensity = isRunning ? (1.0 + runProg) : (isMoving ? 1.0 : 0);
-  shakeIntensity = THREE.MathUtils.lerp(shakeIntensity, targetIntensity, isMoving ? 0.12 : 0.06);
 
-  let targetBobX = 0, targetBobY = 0, targetRoll = 0, targetPitch = 0;
+  let targetRoll = swayRoll + moveBobRoll + currentLookRoll + (jitterX * 2.5);
+  let targetPitch = moveBobPitch + (jitterY * 2.5);
 
-  if (isLocked && shakeIntensity > 0.01) {
-    const tempo = isMoving ? (Math.PI / stepInterval) : 2.5;
-    bobTime += deltaTime * tempo;
-    const t = bobTime;
-    const walkAmp = Math.min(shakeIntensity, 1.0);
-    const runBoost = Math.max(0, shakeIntensity - 1.0);
+  // Smooth the result to add "inertia" and "weight"
+  currentBobX = THREE.MathUtils.lerp(currentBobX, targetBobX, 0.12);
+  currentBobY = THREE.MathUtils.lerp(currentBobY, targetBobY, 0.12);
+  currentRoll = THREE.MathUtils.lerp(currentRoll, targetRoll, 0.12);
+  currentPitch = THREE.MathUtils.lerp(currentPitch, targetPitch, 0.12);
 
-    // Phase-aligned to footsteps: t advances π per step, cos peaks at each footstep
-    const swayX = -Math.cos(t) * 0.5 + Math.sin(t * 2.5) * 0.25 + Math.sin(t * 4.0) * 0.1;
-    const swayZ = -Math.sin(t) * 0.35 + Math.sin(t * 2.0) * 0.25 + Math.sin(t * 3.0) * 0.15;
-    const verticalBounce = Math.pow(Math.abs(Math.cos(t)), 2.0);
+  // Update camera rotation (secondary layers)
+  // Add a slight forward "kick" on each step impact, stronger when running
+  const stepKick = Math.pow(Math.abs(Math.sin(t)), 8.0) * (0.02 + runWeight * 0.03) * movementWeight;
+  camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, (Math.sin(t * 0.5) * 0.015 * movementWeight) + (swayX * 0.5), 0.05);
+  camera.rotation.x = THREE.MathUtils.lerp(camera.rotation.x, smoothPitch + currentPitch + stepKick, 0.25);
 
-    targetBobX = swayX * (0.08 * walkAmp + 0.04 * runBoost);
-    targetBobY = verticalBounce * (0.10 * walkAmp + 0.10 * runBoost) + Math.abs(swayZ) * (0.04 * walkAmp + 0.02 * runBoost);
-    targetRoll = -Math.cos(t) * (0.04 * walkAmp + 0.17 * runBoost);
-    targetPitch = -Math.cos(t) * (0.07 * walkAmp + 0.08 * runBoost);
-    camera.rotation.y = Math.sin(t) * 0.005 * walkAmp - Math.cos(t * 0.5) * 0.10 * runBoost;
-  } else if (isLocked) {
-    bobTime += deltaTime * 2.5;
-    targetBobY = Math.sin(bobTime) * 0.13; targetBobX = Math.cos(bobTime * 0.7) * 0.09; targetRoll = Math.sin(bobTime * 0.6) * 0.05; targetPitch = Math.sin(bobTime * 0.4) * 0.035;
-    camera.rotation.y = Math.sin(bobTime * 0.5) * 0.005;
-  }
-
-  currentBobX = THREE.MathUtils.lerp(currentBobX, targetBobX, 0.2);
-  currentBobY = THREE.MathUtils.lerp(currentBobY, targetBobY, 0.2);
-  currentRoll = THREE.MathUtils.lerp(currentRoll, targetRoll, 0.2);
-  currentPitch = THREE.MathUtils.lerp(currentPitch, targetPitch, 0.2);
-
+  // Lean logic (kept similar but smoothed)
   let targetLeanX = 0, targetLeanRoll = 0;
   if (isLocked) {
     if (keys.q) {
-      leanHeldX = -1.1; leanHeldRoll = 0.52; leanDelayTimer = 0.2; leanReturnProgress = 1; lastMovementX += 0.08;
+      leanHeldX = -1.1; leanHeldRoll = 0.52; leanDelayTimer = 0.2; leanReturnProgress = 1;
     } else if (keys.e) {
-      leanHeldX = 1.1; leanHeldRoll = -0.52; leanDelayTimer = 0.2; leanReturnProgress = 1; lastMovementX += 0.08;
+      leanHeldX = 1.1; leanHeldRoll = -0.52; leanDelayTimer = 0.2; leanReturnProgress = 1;
     }
 
     if (keys.q || keys.e) {
@@ -861,26 +937,169 @@ function updateCameraShake(deltaTime) {
       if (leanDelayTimer > 0) {
         leanDelayTimer -= deltaTime;
         targetLeanX = leanHeldX; targetLeanRoll = leanHeldRoll;
-      } else if (leanReturnProgress >= 1) {
-        leanReturnFromX = currentLeanX; leanReturnFromRoll = currentLeanRoll;
-        leanReturnProgress = 0;
-        targetLeanX = leanReturnFromX; targetLeanRoll = leanReturnFromRoll;
       } else {
-        leanReturnProgress += deltaTime / 3;
-        if (leanReturnProgress > 1) leanReturnProgress = 1;
-        const ease = 1 - Math.pow(1 - leanReturnProgress, 3);
-        targetLeanX = THREE.MathUtils.lerp(leanReturnFromX, 0, ease);
-        targetLeanRoll = THREE.MathUtils.lerp(leanReturnFromRoll, 0, ease);
-        if (leanReturnProgress >= 1) { leanHeldX = 0; leanHeldRoll = 0; }
+        leanReturnProgress = Math.max(0, leanReturnProgress - deltaTime * 3);
+        const ease = 1 - Math.pow(1 - (1 - leanReturnProgress), 3);
+        targetLeanX = THREE.MathUtils.lerp(0, leanHeldX, 1 - ease);
+        targetLeanRoll = THREE.MathUtils.lerp(0, leanHeldRoll, 1 - ease);
+        if (leanReturnProgress <= 0) { leanHeldX = 0; leanHeldRoll = 0; leanReturnProgress = 1; }
       }
     }
   }
-  currentLeanX = THREE.MathUtils.lerp(currentLeanX, targetLeanX, 0.14);
-  currentLeanRoll = THREE.MathUtils.lerp(currentLeanRoll, targetLeanRoll, 0.14);
+  currentLeanX = THREE.MathUtils.lerp(currentLeanX, targetLeanX, 0.1);
+  currentLeanRoll = THREE.MathUtils.lerp(currentLeanRoll, targetLeanRoll, 0.1);
 
-  const leanVector = new THREE.Vector3(currentBobX + currentLeanX, currentBobY - 0.05, 0).applyQuaternion(cameraPivot.quaternion); 
-  cameraPivot.position.copy(player.position).add(leanVector);
-  camera.rotation.z = currentRoll + currentLeanRoll + (Math.random() - 0.5) * 0.003;
+  // --- SMOOTH CAMERA COLLISION SYSTEM ---
+  let desiredLeanVector = new THREE.Vector3(currentBobX + currentLeanX, currentBobY - 0.05, 0).applyQuaternion(cameraPivot.quaternion);
+  
+  const rayOrigin = player.position.clone();
+  const rayDir = desiredLeanVector.clone().normalize();
+  const rayDist = desiredLeanVector.length();
+
+  let targetCollisionFactor = 1.0;
+  if (rayDist > 0.01 && wallCollisionObjects.length > 0) {
+    wallRaycaster.set(rayOrigin, rayDir);
+    const hits = wallRaycaster.intersectObjects(wallCollisionObjects);
+    if (hits.length > 0 && hits[0].distance < rayDist + 0.25) {
+      targetCollisionFactor = Math.max(0, (hits[0].distance - 0.25) / rayDist);
+    }
+  }
+  // Smoothly adjust the collision factor to prevent snapping
+  collisionContactDist = THREE.MathUtils.lerp(collisionContactDist, targetCollisionFactor, 0.15);
+  desiredLeanVector.multiplyScalar(collisionContactDist);
+
+  cameraPivot.position.copy(player.position).add(desiredLeanVector);
+  camera.rotation.z = currentRoll + currentLeanRoll + (Math.random() - 0.5) * 0.001; 
+}
+
+// --- SCP MANAGER ENGINE ---
+function updateSCPManager(deltaTime) {
+  if (gameState !== 'playing') return;
+
+  // 1. SCPSOLO JUMPSCARE LOGIC
+  if (jumpscarePhase === 'idle') {
+    jumpscareTimer -= deltaTime;
+    if (jumpscareTimer <= 0) {
+      // console.log("DEV: Jumpscare solo starting...");  // Debugging Console (Only For Debugging)
+      jumpscarePhase = 'flicker';
+      jumpscareInternalTimer = 0;
+      
+      // Auto-turn on flashlight if off
+      if (!flashlightOn) {
+        flashlightOn = true;
+        flashlight.visible = true;
+        const flashAudio = new THREE.Audio(audioListener);
+        flashAudio.setBuffer(flashOnBuffer);
+        flashAudio.setVolume(0.7);
+        flashAudio.play();
+      }
+    }
+  } else if (jumpscarePhase === 'flicker') {
+    jumpscareInternalTimer += deltaTime;
+    // Flicker twice (On-Off-On-Off) in 1.2s
+    if (jumpscareInternalTimer < 0.3) flashlight.visible = true;
+    else if (jumpscareInternalTimer < 0.6) flashlight.visible = false;
+    else if (jumpscareInternalTimer < 0.9) flashlight.visible = true;
+    else if (jumpscareInternalTimer < 1.2) flashlight.visible = false;
+    else {
+      flashlight.visible = true; // Stay on for countdown
+      jumpscarePhase = 'waiting';
+      jumpscareInternalTimer = 0;
+    }
+  } else if (jumpscarePhase === 'waiting') {
+    jumpscareInternalTimer += deltaTime;
+    if (jumpscareInternalTimer >= 3.0) {
+      jumpscarePhase = 'rushing';
+      jumpscareInternalTimer = 0;
+      
+      // Get exact camera forward direction for spawn and rush
+      const cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
+      cameraForward.y = 0; cameraForward.normalize();
+
+      // Spawn SCP in front of camera view
+      if (scpSoloMesh) {
+        scpSoloMesh.position.copy(player.position).add(cameraForward.clone().multiplyScalar(8));
+        scpSoloMesh.position.y = 0;
+        scpSoloMesh.lookAt(player.position.x, 0, player.position.z);
+        scpSoloMesh.visible = true;
+
+        // Rush direction is the opposite of the spawn direction relative to player
+        jumpscareRushDir.copy(cameraForward).negate().normalize();
+      }
+
+      // Play jumpscare audio
+      if (jumpscareBuffer) {
+        const jsAudio = new THREE.Audio(audioListener);
+        jsAudio.setBuffer(jumpscareBuffer);
+        jsAudio.setVolume(1.0);
+        jsAudio.play();
+      }
+    }
+  } else if (jumpscarePhase === 'rushing') {
+    jumpscareInternalTimer += deltaTime;
+    if (scpSoloMesh) {
+      // Move in a perfectly straight line through the player
+      scpSoloMesh.position.add(jumpscareRushDir.clone().multiplyScalar(deltaTime * 24)); 
+    }
+    // Disappear after passing through (approx 1 second to go 24 units)
+    if (jumpscareInternalTimer >= 1.0) {
+      if (scpSoloMesh) scpSoloMesh.visible = false;
+      jumpscarePhase = 'idle';
+      jumpscareTimer = 60 + Math.random() * 120; // Reset timer
+    }
+  }
+
+  // 2. SCP FALLING OBJECT LOGIC
+  if (!fallingObjectActive) {
+    metalFallTimer -= deltaTime;
+    if (metalFallTimer <= 0) {
+      fallingObjectActive = true;
+      metalFallTimer = 30 + Math.random() * 60;
+      
+      if (scpFallingMesh) {
+        currentFallingObject = scpFallingMesh.clone();
+        currentFallingObject.name = "falling_scp_instance"; // Set name for tracking
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 3 + Math.random() * 5;
+        currentFallingObject.position.set(
+          player.position.x + Math.cos(angle) * dist,
+          5.0, // Start high
+          player.position.z + Math.sin(angle) * dist
+        );
+        scene.add(currentFallingObject);
+        fallingVelocity = 0;
+      }
+    }
+  } else if (currentFallingObject) {
+    fallingVelocity += 9.8 * deltaTime; // Gravity
+    currentFallingObject.position.y -= fallingVelocity * deltaTime;
+    
+    if (currentFallingObject.position.y <= 0.2) {
+      currentFallingObject.position.y = 0.2;
+      fallingObjectActive = false;
+      
+      // Play metal hit sound
+      if (hitMetalBuffer) {
+        const hitAudio = new THREE.Audio(audioListener);
+        hitAudio.setBuffer(hitMetalBuffer);
+        hitAudio.setVolume(0.8);
+        hitAudio.play();
+      }
+      
+      currentFallingObject = null;
+    }
+  }
+
+  // 3. PERSISTENT FALLING OBJECT CLEANUP
+  // Scan scene for falling objects and remove them if player is far away
+  scene.children.forEach(child => {
+    if (child.name === "falling_scp_instance") {
+      const dist = player.position.distanceTo(child.position);
+      if (dist > 35) { // Remove if player is more than 35 units away
+        scene.remove(child);
+      }
+    }
+  });
 }
 
 // --- AMBIENCE RANDOM PLAYBACK ---
@@ -888,7 +1107,7 @@ let ambienceTimer = 0;
 let ambienceInterval = 30 + Math.random() * 60;
 
 function updateAmbienceSystem(deltaTime) {
-  console.log("Time Ambience:", ambienceInterval)
+  // console.log("Time Ambience:", ambienceInterval, "SCP:", jumpscarePhase, jumpscareTimer) // Debugging Console (Only For Debugging)
   if (gameState !== 'playing' || isMuted) return;
   ambienceTimer += deltaTime;
   if (ambienceTimer < ambienceInterval) return;
@@ -918,8 +1137,6 @@ function updateAmbienceSystem(deltaTime) {
       pz += (Math.random() - 0.5) * 20;
     }
   }
-
-  console.log("Ambience...")
 
   const posAudio = new THREE.PositionalAudio(audioListener);
   posAudio.setBuffer(buf);
@@ -961,15 +1178,26 @@ function animate() {
       smoothYaw += yawDiff * 0.2;
       smoothPitch = THREE.MathUtils.lerp(smoothPitch, pitch, 0.2);
       cameraPivot.rotation.y = smoothYaw;
-      camera.rotation.x = smoothPitch + (Math.random() - 0.5) * 0.0015 + currentPitch;
+      // camera.rotation.x is now handled inside updateCameraShake for smoother blending
+      // camera.rotation.y is also handled inside updateCameraShake for bodycam sway
+      
       // Smooth zoom
       zoomFov = THREE.MathUtils.lerp(zoomFov, zoomTarget, 0.24);
       camera.fov = zoomFov;
       camera.updateProjectionMatrix();
+
+      // --- DYNAMIC FLASHLIGHT ZOOM FIX ---
+      const zoomRatio = (60 - zoomFov) / (60 - 12); // 0 at 60fov, 1 at 12fov
+      flashlight.intensity = 8 + zoomRatio * 15; 
+      flashlight.angle = (Math.PI / 3.8) * (1 - zoomRatio * 0.4);
+      flashlight.distance = 35 + zoomRatio * 35;
+      flashlight.penumbra = 0.6 + zoomRatio * 0.4;
+
       // Decay motion blur intensity
       lastMovementX *= 0.96;
       lastMovementY *= 0.96;
       updateFootstepAudioLogic(deltaTime);
+      updateSCPManager(deltaTime);
       updateAmbienceSystem(deltaTime);
       updateProceduralMap(); 
     } else {
