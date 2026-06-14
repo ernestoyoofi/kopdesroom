@@ -1,11 +1,11 @@
 {
   "name": "kopdesroom",
-  "version": "0.0.0",
+  "version": "0.9-14062026-demo",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node write-assets-list.js",
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"
