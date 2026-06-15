@@ -3,7 +3,7 @@ import path from 'path';
 import { createHash, randomBytes } from 'crypto';
 
 const __dirname = path.resolve();
-const ignoreList = ["sitemap.xml","robots.txt","version/*"]
+const ignoreList = ["sitemap.xml","robots.txt","version/*","CNAME","favicon.svg","icons.svg"]
 
 const getListAssets = () => {
   const dir = path.join(__dirname, 'dist').replace(/\\/g, '/') + '/';
