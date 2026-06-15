@@ -11,8 +11,9 @@ if(window.isAppTauriRunning) {
 
 // --- 0. CONFIGURATION & STATE SYSTEM ---
 // const GAME_FPS = 60; // test 60fps
+const GAME_FPS = 35;
 // const GAME_FPS = 30; // test 30fps
-const GAME_FPS = 23.3;
+// const GAME_FPS = 23.3;
 const ASPECT_RATIO = 4 / 3;
 
 // Game States: 'loading', 'voice-setup', 'playing', 'paused', 'gameover'
@@ -61,6 +62,7 @@ const player = {
   radius: 0.6,
   walkSpeed: 2.28,
   runSpeed: 6.2,
+  crouchSpeed: 0.8,
   velocity: new THREE.Vector3(),
   acceleration: 10,
   friction: 6
@@ -109,7 +111,8 @@ const audioListener = new THREE.AudioListener();
 camera.add(audioListener);
 
 const bgAmbientNoise = new THREE.Audio(audioListener);
-const bgSongDaise = new THREE.Audio(audioListener);
+const bgSongs = [];
+let currentSong = null;
 const audioLoader = new THREE.AudioLoader();
 
 let footstepLeftBuffer = null;
@@ -117,7 +120,7 @@ let footstepRightBuffer = null;
 let flashOnBuffer = null;
 let flashOffBuffer = null;
 const ambienceBuffers = [];
-let totalAudioFiles = 10, audioDownloadedCount = 0; // Increased to 10
+let totalAudioFiles = 0, audioDownloadedCount = 0;
 const audioProgressMap = new Map();
 let isMuted = false;
 
@@ -289,7 +292,7 @@ document.addEventListener('pointerlockchange', () => {
       gameState = 'playing';
       // Kembalikan volume kaset atau tetap mute sesuai pilihan
       bgAmbientNoise.setVolume(isMuted ? 0 : 0.4);
-      bgSongDaise.setVolume(isMuted ? 0 : 0.5);
+      if (currentSong) currentSong.setVolume(isMuted ? 0 : 0.5);
     }
   } else {
     isLocked = false;
@@ -300,7 +303,7 @@ document.addEventListener('pointerlockchange', () => {
       gameState = 'paused';
       // Redupkan volume tape kaset agar hawa pause kerasa hening pengap
       bgAmbientNoise.setVolume(0.08);
-      bgSongDaise.setVolume(0.08);
+      if (currentSong) currentSong.setVolume(0.08);
     }
   }
 });
@@ -347,7 +350,12 @@ canvas.addEventListener('wheel', (e) => {
   zoomTarget = Math.max(12, Math.min(60, zoomTarget));
 }, { passive: false });
 
-const keys = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
+const keys = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false, c: false, x: false };
+
+let crouchTarget = 0;
+let crouchOffset = 0;
+let lookUpTarget = 0;
+let lookUpOffset = 0;
 
 window.addEventListener('keydown', (e) => { 
   if (gameState === 'voice-setup') {
@@ -369,11 +377,14 @@ window.addEventListener('keydown', (e) => {
     isMuted = !isMuted;
     const targetVolume = isMuted ? 0 : 0.5;
     bgAmbientNoise.setVolume(isMuted ? 0 : 0.4);
-    bgSongDaise.setVolume(targetVolume);
+    if (currentSong) currentSong.setVolume(targetVolume);
   }
 
   const key = e.key.toLowerCase();
-  if (key === 'shift') keys.shift = true;
+  if (key === 'shift') {
+    keys.shift = true;
+    if (keys.x) keys.x = false;
+  }
   else if (key in keys) keys[key] = true; 
 });
 
@@ -395,6 +406,7 @@ function initUserMicrophone() {
       micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
       source.connect(micAnalyser);
       gameState = 'voice-setup';
+      playRandomSong();
     })
     .catch((err) => {
       alert("ALERT! Game ini wajib mengaktifkan izin Microphone untuk bermain!");
@@ -484,7 +496,7 @@ function initGlobalPreLoader() {
 
   const audioFiles = [
     { name: 'noise', url: '/bg/bg-noise-backroom.mp3' },
-    { name: 'song', url: '/bg/bg-song-daise.mp3' },
+    { name: 'song-0', url: '/bg/bg-song-daise.mp3' },
     { name: 'fsLeft', url: '/sfx/footstep-left.mp3' },
     { name: 'fsRight', url: '/sfx/footstep-right.mp3' },
     { name: 'flashOn', url: '/sfx/flashlight-on.mp3' },
@@ -494,12 +506,17 @@ function initGlobalPreLoader() {
     { name: 'jumpscare', url: '/sfx/jumpscare-wokaget.mp3' },
     { name: 'metal', url: '/sfx/hit-metal-falling.mp3' }
   ];
+  totalAudioFiles = audioFiles.length;
   audioFiles.forEach((file, idx) => {
     audioProgressMap.set(idx, 0);
     audioLoader.load(file.url,
       (buffer) => {
         if (idx === 0) bgAmbientNoise.setBuffer(buffer);
-        else if (idx === 1) bgSongDaise.setBuffer(buffer);
+        else if (file.name.startsWith('song-')) {
+          const audio = new THREE.Audio(audioListener);
+          audio.setBuffer(buffer);
+          bgSongs.push(audio);
+        }
         else if (file.name === 'fsLeft') footstepLeftBuffer = buffer;
         else if (file.name === 'fsRight') footstepRightBuffer = buffer;
         else if (file.name === 'flashOn') flashOnBuffer = buffer;
@@ -515,6 +532,16 @@ function initGlobalPreLoader() {
   });
 }
 
+function playRandomSong() {
+  if (bgSongs.length === 0) return;
+  if (currentSong) currentSong.stop();
+  const idx = Math.floor(Math.random() * bgSongs.length);
+  currentSong = bgSongs[idx];
+  currentSong.setLoop(true);
+  currentSong.setVolume(isMuted ? 0 : 0.5);
+  currentSong.play();
+}
+
 function startGlobalGameAudio() {
   // Beri jeda 200ms agar browser tidak menolak Pointer Lock
   setTimeout(() => {
@@ -528,27 +555,16 @@ function startGlobalGameAudio() {
   bgAmbientNoise.setVolume(0.4); 
   bgAmbientNoise.play();
 
-  bgSongDaise.setLoop(true); 
-  bgSongDaise.setVolume(0.5); 
-  bgSongDaise.play();
+  if (!currentSong || !currentSong.isPlaying) {
+    playRandomSong();
+  } else {
+    currentSong.setVolume(isMuted ? 0 : 0.5);
+  }
 
   loadRoomInstance(0, 0);
   loadRoomInstance(1, 0); loadRoomInstance(-1, 0);
   loadRoomInstance(0, 1); loadRoomInstance(0, -1);
 }
-// function startGlobalGameAudio() {
-//   canvas.requestPointerLock(); // REQUES UTAMA: Kunci mouse instan pas setup mic beres!
-//   survivalTime = 0;
-//   highNoiseDuration = 0;
-
-//   bgAmbientNoise.setLoop(true); bgAmbientNoise.setVolume(0.4); bgAmbientNoise.play();
-//   bgSongDaise.setLoop(true); bgSongDaise.setVolume(0.5); bgSongDaise.play();
-
-//   loadRoomInstance(0, 0);
-//   loadRoomInstance(1, 0); loadRoomInstance(-1, 0);
-//   loadRoomInstance(0, 1); loadRoomInstance(0, -1);
-// }
-
 function loadRoomInstance(gridX, gridZ) {
   const key = `${gridX},${gridZ}`;
   if (activeRooms.has(key)) return; 
@@ -729,7 +745,7 @@ function triggerCameraCrashDisconnect() {
   finalSurvivalTime = Math.round(survivalTime);
   
   bgAmbientNoise.stop();
-  bgSongDaise.stop();
+  if (currentSong) currentSong.stop();
   document.exitPointerLock();
 
   camera.rotation.set(Math.PI / 2.3, 0, Math.PI / 4); 
@@ -756,6 +772,8 @@ function resetGameVariables() {
   runTime = 0;
   leanHeldX = 0; leanHeldRoll = 0; leanDelayTimer = 0; leanReturnProgress = 1;
   ambienceTimer = 0; ambienceInterval = 30 + Math.random() * 60;
+  crouchTarget = 0; crouchOffset = 0; lookUpTarget = 0; lookUpOffset = 0;
+  keys.c = false; keys.x = false;
 
   flashlightOn = true;
   flashlight.visible = true;
@@ -769,7 +787,7 @@ function resetGameVariables() {
 // --- 9. PHYSIC COLLISION ENGINE (Eased Movement) ---
 function updatePhysics(deltaTime) {
   if (!isLocked || gameState !== 'playing') return;
-  const maxSpeed = keys.shift ? player.runSpeed : player.walkSpeed;
+  let maxSpeed = keys.c ? player.crouchSpeed : (keys.shift ? player.runSpeed : player.walkSpeed);
 
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraPivot.quaternion);
   const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cameraPivot.quaternion);
@@ -838,14 +856,14 @@ function playDynamicFootstepSFX() {
   if (!bufferTarget) return;
   const temporaryStepAudio = new THREE.Audio(audioListener);
   temporaryStepAudio.setBuffer(bufferTarget);
-  temporaryStepAudio.setVolume(keys.shift ? 0.65 : 0.45);
+  temporaryStepAudio.setVolume((keys.shift && !keys.c) ? 0.65 : 0.45);
   temporaryStepAudio.play();
   lastStepWasLeft = !lastStepWasLeft;
 }
 function updateFootstepAudioLogic(deltaTime) {
   const isMoving = keys.w || keys.a || keys.s || keys.d;
   if (!isLocked || !isMoving || gameState !== 'playing') { stepTimer = 0; return; }
-  const stepInterval = keys.shift ? 0.22 : 0.38;
+  const stepInterval = (keys.shift && !keys.c) ? 0.22 : 0.38;
   stepTimer += deltaTime;
   if (stepTimer >= stepInterval) { stepTimer = 0; playDynamicFootstepSFX(); }
 }
@@ -861,8 +879,12 @@ let collisionContactDist = 1.0;
 let currentLookRoll = 0; // Added for tilting when looking around
 function updateCameraShake(deltaTime) {
   if (gameState !== 'playing') return;
+  crouchTarget = keys.c ? -0.8 : 0;
+  crouchOffset = THREE.MathUtils.lerp(crouchOffset, crouchTarget, 0.08);
+  lookUpTarget = keys.x ? 0.35 : 0;
+  lookUpOffset = THREE.MathUtils.lerp(lookUpOffset, lookUpTarget, 0.08);
   const isMoving = (keys.w || keys.a || keys.s || keys.d) && isLocked;
-  const isRunning = keys.shift && isMoving;
+  const isRunning = keys.shift && isMoving && !keys.c;
   
   // Weights for blending animations smoothly
   movementWeight = THREE.MathUtils.lerp(movementWeight, isMoving ? 1.0 : 0.0, 0.08);
@@ -983,6 +1005,7 @@ function updateCameraShake(deltaTime) {
   desiredLeanVector.multiplyScalar(collisionContactDist);
 
   cameraPivot.position.copy(player.position).add(desiredLeanVector);
+  cameraPivot.position.y += crouchOffset + lookUpOffset;
   camera.rotation.z = currentRoll + currentLeanRoll + (Math.random() - 0.5) * 0.001; 
 }
 
