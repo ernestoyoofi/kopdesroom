@@ -1,0 +1,168 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+  color: #0f0f0f;
+  background-color: #f6f6f6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+#loader {
+  text-align: center;
+  max-width: 480px;
+  width: 100%;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 0 0 28px;
+  color: #888;
+  font-size: 0.95rem;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.spinner-small {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #e0e0e0;
+  border-top-color: #646cff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.bar-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.bar-track {
+  width: 100%;
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  width: 0%;
+  background: #646cff;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.bar-label {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: #888;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.info {
+  margin: 0 0 20px;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.actions {
+  margin-top: 8px;
+}
+
+.error-text {
+  color: #e74c3c;
+  margin: 0 0 16px;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.btn-row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.btn {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.5em 1.2em;
+  font-size: 0.9rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: #fff;
+  background: #646cff;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn:hover {
+  background: #535bf2;
+}
+
+.btn-secondary {
+  background: #666;
+}
+
+.btn-secondary:hover {
+  background: #555;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #f6f6f6;
+    background-color: #2f2f2f;
+  }
+  .spinner-small {
+    border-color: #555;
+    border-top-color: #646cff;
+  }
+  .bar-track {
+    background: #444;
+  }
+  .info {
+    color: #aaa;
+  }
+  .subtitle {
+    color: #999;
+  }
+  .bar-label {
+    color: #aaa;
+  }
+}

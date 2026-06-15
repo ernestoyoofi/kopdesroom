@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kopdesroom</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <main class="container" id="app">
+      <div id="loader">
+        <h1 class="title">Kopdesroom</h1>
+        <p class="subtitle">Game koperasi desa</p>
+
+        <div class="progress-row" id="progress-row" style="display:none;">
+          <div class="spinner-small"></div>
+          <div class="bar-wrap">
+            <div class="bar-track">
+              <div class="bar-fill" id="progress-bar"></div>
+            </div>
+            <p class="bar-label" id="progress-text"></p>
+          </div>
+        </div>
+
+        <p class="info" id="status-text">Initializing...</p>
+
+        <div class="actions" id="error-container" style="display:none;">
+          <p class="error-text" id="error-text"></p>
+          <div class="btn-row">
+            <button class="btn" id="retry-btn">Retry</button>
+          </div>
+        </div>
+
+        <div class="btn-row" id="clear-row" style="display:none;">
+          <button class="btn btn-secondary" id="clear-data-btn">Clear Data</button>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
