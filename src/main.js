@@ -1,10 +1,18 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+
+// Remove All Info If Running On Tauri/App
+if(window.isAppTauriRunning) {
+  document.querySelector(".info-nomobilecontrol")?.remove()
+  document.querySelector(".help-overlay")?.remove()
+}
 
 // --- 0. CONFIGURATION & STATE SYSTEM ---
 // const GAME_FPS = 60; // test 60fps
-const GAME_FPS = 30; // test 30fps
-// const GAME_FPS = 23.3;
+// const GAME_FPS = 30; // test 30fps
+const GAME_FPS = 23.3;
 const ASPECT_RATIO = 4 / 3;
 
 // Game States: 'loading', 'voice-setup', 'playing', 'paused', 'gameover'
@@ -68,6 +76,10 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 2.43;
+
+const ktx2Loader = new KTX2Loader()
+  .setTranscoderPath('/basis/')
+  .detectSupport(renderer);
 
 const renderTarget = new THREE.WebGLRenderTarget(size.width, size.height);
 
@@ -417,6 +429,8 @@ const activeRooms = new Map();
 const wallCollisionObjects = []; 
 const floorObjects = [];     
 const loader = new GLTFLoader();
+loader.setKTX2Loader(ktx2Loader);
+loader.setMeshoptDecoder(MeshoptDecoder);
 const wallRaycaster = new THREE.Raycaster();
 
 const roomMasterCache = { 1: null, 2: null, 3: null, 4: null };
