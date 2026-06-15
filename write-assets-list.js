@@ -3,7 +3,12 @@ import path from 'path';
 import { createHash, randomBytes } from 'crypto';
 
 const __dirname = path.resolve();
-const ignoreList = ["sitemap.xml","robots.txt","version/*","CNAME","favicon.svg","icons.svg"]
+const ignoreList = [
+  "sitemap.xml","robots.txt",
+  "version/*",
+  "CNAME",
+  "download.html", "assets/download*"
+]
 
 const getListAssets = () => {
   const dir = path.join(__dirname, 'dist').replace(/\\/g, '/') + '/';
@@ -19,6 +24,9 @@ const getListAssets = () => {
         const relativePath = filePath.replace(/\\/g, '/').replace(dir, '');
         if (ignoreList.some(pattern => {
           if (pattern.endsWith('/*')) {
+            return relativePath.startsWith(pattern.slice(0, -1));
+          }
+          if (pattern.endsWith('*')) {
             return relativePath.startsWith(pattern.slice(0, -1));
           }
           return relativePath === pattern;
