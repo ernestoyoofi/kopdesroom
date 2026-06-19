@@ -135,6 +135,7 @@ let jumpscareTimer = 60 + Math.random() * 60; // Start jumpscare after 1-2 mins
 let jumpscarePhase = 'idle'; // 'idle', 'flicker', 'waiting', 'rushing'
 let jumpscareInternalTimer = 0;
 let jumpscareRushDir = new THREE.Vector3();
+let isDeathAnimation = false; // Flag to prevent pause during death animation
 
 let metalFallTimer = 30 + Math.random() * 45;
 let fallingObjectActive = false;
@@ -266,7 +267,7 @@ function drawInternalLoadingHUD(nowTime) {
 
     textContext.font = "16px 'JetBrains Mono', monospace";
     textContext.fillStyle = "#88887c";
-    textContext.fillText("CRITICAL SIGNAL LOAD OVERFLOW (200ms-400ms)", 256, 220);
+    textContext.fillText("CRITICAL SIGNAL LOAD", 256, 220);
     
     textContext.font = "bold 20px 'JetBrains Mono', monospace";
     textContext.fillStyle = "#ffffff";
@@ -290,7 +291,7 @@ document.addEventListener('pointerlockchange', () => {
     // Jika kursor berhasil me-lock kembali pas kondisi pause, kembalikan game berjalan lancar
     if (gameState === 'paused') {
       gameState = 'playing';
-      // Kembalikan volume kaset atau tetap mute sesuai pilihan
+      triggerStateTransition(1.0, 80);
       bgAmbientNoise.setVolume(isMuted ? 0 : 0.4);
       if (currentSong) currentSong.setVolume(isMuted ? 0 : 0.5);
     }
@@ -299,9 +300,10 @@ document.addEventListener('pointerlockchange', () => {
     lastMovementX = 0; lastMovementY = 0;
     
     // FIX UTAMA: Jika player menekan ESC atau memencet Windows saat bermain, game langsung PAUSE!
-    if (gameState === 'playing') {
+    // But skip if death animation is playing
+    if (gameState === 'playing' && !isDeathAnimation) {
       gameState = 'paused';
-      // Redupkan volume tape kaset agar hawa pause kerasa hening pengap
+      triggerStateTransition(0.0, 80);
       bgAmbientNoise.setVolume(0.08);
       if (currentSong) currentSong.setVolume(0.08);
     }
@@ -363,7 +365,8 @@ window.addEventListener('keydown', (e) => {
     if (e.key === '+' || e.key === '=') micThreshold = Math.min(95, micThreshold + 5);
     if (e.key === 'Enter') {
       gameState = 'playing';
-      startGlobalGameAudio(); // Auto-lock mouse dan jalankan game murni saat Enter ditekan!
+      triggerStateTransition(1.0, 80);
+      startGlobalGameAudio();
     }
     return;
   }
@@ -406,6 +409,7 @@ function initUserMicrophone() {
       micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
       source.connect(micAnalyser);
       gameState = 'voice-setup';
+      triggerStateTransition(0.0, 80);
       playRandomSong();
     })
     .catch((err) => {
@@ -639,10 +643,12 @@ initGlobalPreLoader();
 const vhsShaderMaterial = new THREE.ShaderMaterial({
   uniforms: {
     tDiffuse: { value: null },
-    tHUD: { value: textTexture }, 
+    tHUD: { value: textTexture },
     uTime: { value: 0 },
     uBlurIntensity: { value: 0.0 },
-    uScreenState: { value: 0.0 }
+    uScreenState: { value: 0.0 },
+    uTransitionState: { value: 0.0 },
+    uTransitionProgress: { value: 0.0 }
   },
   vertexShader: `
     varying vec2 vUv;
@@ -654,6 +660,8 @@ const vhsShaderMaterial = new THREE.ShaderMaterial({
     uniform float uTime;
     uniform float uBlurIntensity;
     uniform float uScreenState;
+    uniform float uTransitionState;
+    uniform float uTransitionProgress;
     varying vec2 vUv;
 
     float noise(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
@@ -669,6 +677,23 @@ const vhsShaderMaterial = new THREE.ShaderMaterial({
       if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return;
       }
+
+      // --- TRANSITION EFFECT: Simple Noise + Blue Flash ---
+      if (uTransitionState > 0.5) {
+        float t = uTransitionProgress;
+        // Simple static noise
+        float staticNoise = noise(uv * 100.0 + vec2(uTime * 30.0, 0.0));
+        // Blue flash at start
+        float blueFlash = step(t, 0.3) * 0.6;
+        // Mix original with noise
+        vec4 baseColor = texture2D(tDiffuse, uv);
+        vec4 transColor = baseColor;
+        transColor.rgb = mix(transColor.rgb, vec3(staticNoise), 0.5);
+        transColor.rgb += vec3(0.2, 0.3, 0.8) * blueFlash;
+        gl_FragColor = transColor;
+        return;
+      }
+
       vec4 finalColor;
 
       // Jika state layar bernilai 0.0 (loading, setup, pause, gameover), cetak tulisan kanvas murni
@@ -732,6 +757,36 @@ const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const postPlane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), vhsShaderMaterial);
 postScene.add(postPlane);
 
+// Global variables for transition animation
+let transitionAnimationId = null;
+let cameraDropVelocity = 0;
+let cameraDropBounce = false;
+let cameraDropStartY = 0;
+let cameraDropTargetY = 0;
+
+function triggerStateTransition(targetState, duration = 1200) {
+  const startTime = performance.now();
+  vhsShaderMaterial.uniforms.uTransitionState.value = 1.0;
+  vhsShaderMaterial.uniforms.uTransitionProgress.value = 0.0;
+  
+  if (transitionAnimationId) cancelAnimationFrame(transitionAnimationId);
+  
+  function animateTransition() {
+    const elapsed = performance.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1.0);
+    vhsShaderMaterial.uniforms.uTransitionProgress.value = progress;
+    
+    if (progress < 1.0) {
+      transitionAnimationId = requestAnimationFrame(animateTransition);
+    } else {
+      vhsShaderMaterial.uniforms.uTransitionState.value = 0.0;
+      vhsShaderMaterial.uniforms.uScreenState.value = targetState;
+      transitionAnimationId = null;
+    }
+  }
+  transitionAnimationId = requestAnimationFrame(animateTransition);
+}
+
 function triggerConnectTransition() {
   if (vhsShaderMaterial.uniforms.uScreenState.value === 1.0) return;
   setTimeout(() => {
@@ -741,19 +796,63 @@ function triggerConnectTransition() {
 }
 
 function triggerCameraCrashDisconnect() {
-  gameState = 'gameover';
   finalSurvivalTime = Math.round(survivalTime);
   
   bgAmbientNoise.stop();
   if (currentSong) currentSong.stop();
+  
+  // Set death flag BEFORE exitPointerLock to prevent pause
+  isDeathAnimation = true;
   document.exitPointerLock();
 
-  camera.rotation.set(Math.PI / 2.3, 0, Math.PI / 4); 
-  cameraPivot.position.y = player.position.y - 1.45; 
-
-  setTimeout(() => {
-    vhsShaderMaterial.uniforms.uScreenState.value = 0.0; 
-  }, 350); 
+  // Keep game screen ON during fall
+  vhsShaderMaterial.uniforms.uScreenState.value = 1.0;
+  vhsShaderMaterial.uniforms.uTransitionState.value = 0.0;
+  
+  // Dramatic camera drop animation
+  cameraDropStartY = cameraPivot.position.y;
+  cameraDropTargetY = 0.15;
+  cameraDropVelocity = 0;
+  
+  const fallStartTime = performance.now();
+  
+  function animateFall() {
+    const elapsed = performance.now() - fallStartTime;
+    const dt = Math.min(elapsed / 1000, 1.2);
+    
+    if (dt < 0.25) {
+      cameraDropVelocity += 45 * 0.016;
+      cameraPivot.position.y -= cameraDropVelocity * 0.016;
+      camera.rotation.z = Math.PI / 4 + Math.sin(elapsed * 0.05) * 0.3;
+      camera.rotation.x = Math.PI / 2.3 + Math.cos(elapsed * 0.03) * 0.2;
+    } else if (dt < 0.5) {
+      cameraPivot.position.y = cameraDropTargetY;
+      camera.rotation.z = Math.PI / 4 + Math.sin(elapsed * 0.1) * 0.5;
+      camera.rotation.x = Math.PI / 2.3 + 0.3;
+    } else if (dt < 0.7) {
+      const bounceProgress = (dt - 0.5) / 0.2;
+      cameraPivot.position.y = cameraDropTargetY + Math.sin(bounceProgress * Math.PI) * 0.35;
+      camera.rotation.z = THREE.MathUtils.lerp(Math.PI / 4 + 0.5, 0.3, bounceProgress);
+      camera.rotation.x = THREE.MathUtils.lerp(Math.PI / 2.3 + 0.3, Math.PI / 2.3, bounceProgress);
+    } else if (dt < 1.2) {
+      const settleProgress = (dt - 0.7) / 0.5;
+      cameraPivot.position.y = THREE.MathUtils.lerp(cameraDropTargetY + 0.35, 0.12, settleProgress);
+      camera.rotation.z = THREE.MathUtils.lerp(0.3, Math.PI / 3.5, settleProgress);
+      camera.rotation.x = THREE.MathUtils.lerp(Math.PI / 2.3, Math.PI / 2.5, settleProgress);
+    }
+    
+    if (dt < 1.2) {
+      requestAnimationFrame(animateFall);
+    } else {
+      cameraPivot.position.y = 0.12;
+      camera.rotation.set(Math.PI / 2.5, 0, Math.PI / 3.5);
+      isDeathAnimation = false;
+      gameState = 'gameover';
+      vhsShaderMaterial.uniforms.uScreenState.value = 0.0;
+    }
+  }
+  
+  animateFall();
 }
 
 function resetGameVariables() {
@@ -1031,15 +1130,24 @@ function updateSCPManager(deltaTime) {
         flashAudio.play();
       }
     }
+  function playFlashSound(isOn) {
+  const flashAudio = new THREE.Audio(audioListener);
+  flashAudio.setBuffer(isOn ? flashOnBuffer : flashOffBuffer);
+  flashAudio.setVolume(0.7);
+  flashAudio.play();
+}
   } else if (jumpscarePhase === 'flicker') {
     jumpscareInternalTimer += deltaTime;
-    // Flicker twice (On-Off-On-Off) in 1.2s
-    if (jumpscareInternalTimer < 0.3) flashlight.visible = true;
-    else if (jumpscareInternalTimer < 0.6) flashlight.visible = false;
-    else if (jumpscareInternalTimer < 0.9) flashlight.visible = true;
-    else if (jumpscareInternalTimer < 1.2) flashlight.visible = false;
-    else {
-      flashlight.visible = true; // Stay on for countdown
+    if (jumpscareInternalTimer < 0.3) {
+      if (!flashlight.visible) { flashlight.visible = true; playFlashSound(true); }
+    } else if (jumpscareInternalTimer < 0.6) {
+      if (flashlight.visible) { flashlight.visible = false; playFlashSound(false); }
+    } else if (jumpscareInternalTimer < 0.9) {
+      if (!flashlight.visible) { flashlight.visible = true; playFlashSound(true); }
+    } else if (jumpscareInternalTimer < 1.2) {
+      if (flashlight.visible) { flashlight.visible = false; playFlashSound(false); }
+    } else {
+      flashlight.visible = true;
       jumpscarePhase = 'waiting';
       jumpscareInternalTimer = 0;
     }
